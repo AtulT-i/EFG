@@ -41,7 +41,8 @@ class SchemeEligibilityAssistant:
     def generate_answer(
         self,
         query: str,
-        context_documents: List[Document]
+        context_documents: List[Document],
+        chat_history: Optional[List[dict]] = None
     ) -> dict:
         """
         Generate an answer to a query using retrieved context
@@ -49,6 +50,7 @@ class SchemeEligibilityAssistant:
         Args:
             query: User's question
             context_documents: Retrieved relevant documents
+            chat_history: Optional chat history list
 
         Returns:
             Dictionary containing answer and metadata
@@ -65,7 +67,7 @@ class SchemeEligibilityAssistant:
 
         # Create the prompt
         system_prompt = self._get_system_prompt()
-        user_prompt = self._create_user_prompt(query, context)
+        user_prompt = self._create_user_prompt(query, context, chat_history)
 
         # Generate response
         print(f"\nGenerating answer using {self.model}...")
@@ -110,25 +112,33 @@ Guidelines:
 
 Remember: Your answers should help users understand their eligibility accurately."""
 
-    def _create_user_prompt(self, query: str, context: str) -> str:
+    def _create_user_prompt(self, query: str, context: str, chat_history: Optional[List[dict]] = None) -> str:
         """
         Create the user prompt with query and context
 
         Args:
             query: User's question
             context: Formatted context from retrieved documents
+            chat_history: Optional conversation history
 
         Returns:
             User prompt string
         """
+        history_text = ""
+        if chat_history:
+            history_text = "Previous Conversation:\n"
+            for turn in chat_history[-3:]:  # Keep last 3 turns to avoid context overflow
+                history_text += f"User: {turn['user']}\nAssistant: {turn['assistant']}\n"
+            history_text += "\n"
+
         if not context or context == "No relevant information found.":
-            return f"""Question: {query}
+            return f"""{history_text}Question: {query}
 
 Context: No relevant information found in the knowledge base.
 
 Please inform the user that you don't have information about this scheme in your knowledge base and suggest they check official government websites or contact relevant authorities."""
 
-        return f"""Context from Government Scheme Documents:
+        return f"""{history_text}Context from Government Scheme Documents:
 {context}
 
 Question: {query}
@@ -177,24 +187,70 @@ Please provide a helpful and accurate answer based on the context above. If the 
 
         return sources
 
-    def chat(self, query: str, retriever) -> dict:
+    def chat(self, query: str, retriever, chat_history: Optional[List[dict]] = None) -> dict:
         """
         Complete RAG pipeline: retrieve context and generate answer
 
         Args:
             query: User's question
             retriever: DocumentRetriever instance
+            chat_history: Optional list of previous chat interactions
 
         Returns:
             Dictionary with answer and metadata
         """
-        # Retrieve relevant documents
-        documents = retriever.retrieve_documents(query)
+        # Rewrite query if chat history exists
+        search_query = query
+        if chat_history:
+            search_query = self.rewrite_query(query, chat_history)
 
-        # Generate answer
-        result = self.generate_answer(query, documents)
+        # Retrieve relevant documents using the (possibly rewritten) query
+        documents = retriever.retrieve_documents(search_query)
 
+        # Generate answer using original query to feel natural, but with context from rewritten search
+        result = self.generate_answer(query, documents, chat_history)
+
+        # Add rewritten query to result for debugging/transparency
+        result["search_query"] = search_query
         return result
+
+    def rewrite_query(self, query: str, chat_history: List[dict]) -> str:
+        """
+        Rewrite a follow-up query to be a standalone query based on chat history.
+        """
+        if not chat_history:
+            return query
+            
+        print(f"\nRewriting query using context from {len(chat_history)} previous interactions...")
+        
+        # Format chat history
+        history_text = ""
+        for turn in chat_history:
+            history_text += f"User: {turn['user']}\nAssistant: {turn['assistant']}\n"
+            
+        prompt = f"""Given the following conversation history and the user's follow-up question, 
+rephrase the follow-up question to be a standalone question that can be understood 
+without the conversation history. Do not answer the question, just reformulate it 
+if it contains references like "it", "that", "the scheme", etc. 
+If the question is already standalone, return it exactly as it is.
+
+Chat History:
+{history_text}
+
+Follow-up Question: {query}
+
+Standalone Question:"""
+
+        messages = [
+            SystemMessage(content="You are an expert query generator. Output ONLY the standalone query without any preamble or quotes."),
+            HumanMessage(content=prompt)
+        ]
+        
+        response = self.llm.invoke(messages)
+        rewritten = response.content.strip()
+        print(f"Original Query: '{query}'")
+        print(f"Rewritten Query: '{rewritten}'")
+        return rewritten
 
 
 def main():

@@ -130,6 +130,8 @@ class SchemeAssistantCLI:
         print(f"{Fore.YELLOW}Ask questions about government scheme eligibility{Style.RESET_ALL}")
         print(f"{Fore.YELLOW}Type 'exit' or 'quit' to end the session{Style.RESET_ALL}\n")
 
+        chat_history = []
+
         # Chat loop
         while True:
             try:
@@ -145,7 +147,7 @@ class SchemeAssistantCLI:
 
                 # Get answer
                 print(f"{Fore.YELLOW}Assistant: {Style.RESET_ALL}", end="", flush=True)
-                result = self.assistant.chat(query, self.retriever)
+                result = self.assistant.chat(query, self.retriever, chat_history)
 
                 # Display answer
                 print(result["answer"])
@@ -153,6 +155,11 @@ class SchemeAssistantCLI:
                 # Display sources
                 if result["sources"]:
                     print(f"\n{Fore.BLUE}📚 Sources: {', '.join(result['sources'])}{Style.RESET_ALL}")
+
+                # Update chat history (keep last 5 interactions)
+                chat_history.append({"user": query, "assistant": result["answer"]})
+                if len(chat_history) > 5:
+                    chat_history.pop(0)
 
                 print()  # Blank line for readability
 
